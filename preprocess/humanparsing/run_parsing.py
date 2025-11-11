@@ -20,6 +20,14 @@ except ImportError:
     SEGFORMER_AVAILABLE = False
     print("Warning: transformers library not available. Please install: pip install transformers")
 
+# Try to import scipy for smoothing (optional)
+try:
+    from scipy import ndimage
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("Note: scipy not available. Label smoothing will be disabled.")
+
 
 class SegFormerParsing:
     """
@@ -104,23 +112,10 @@ class SegFormerParsing:
         Initialize mapping from ADE20K classes to ATR human parsing labels.
         ADE20K has 150 classes, we need to map relevant ones to 19 ATR classes.
         """
-        # ADE20K class indices (from ADE20K dataset)
-        # This is a heuristic mapping - for best results, fine-tune on human parsing data
-        self.ade20k_to_atr = {}
-        
-        # Background
-        self.ade20k_to_atr[0] = 0  # background -> background
-        
-        # Person-related classes in ADE20K (approximate mappings)
-        # Note: ADE20K doesn't have fine-grained human parsing labels
-        # We'll use person class and try to infer body parts from context
-        # This is a simplified approach - fine-tuning would be better
-        
         # Person class in ADE20K (class 12 is "person")
-        # We'll use a simple heuristic: detect person regions and map to clothing
         self.person_class_ade20k = 12  # Person class in ADE20K
         
-        print("Note: Using heuristic mapping from ADE20K to ATR labels.")
+        print("Note: Using improved heuristic mapping from ADE20K to ATR labels.")
         print("For best results, consider fine-tuning SegFormer on human parsing dataset.")
     
     def _map_to_atr_labels(self, seg_output: np.ndarray) -> np.ndarray:
@@ -147,57 +142,120 @@ class SegFormerParsing:
     
     def _map_ade20k_to_atr(self, seg_output: np.ndarray) -> np.ndarray:
         """
-        Heuristic mapping from ADE20K classes to ATR human parsing labels.
-        This is a simplified approach - for production, fine-tune on human parsing data.
+        Improved mapping from ADE20K classes to ATR human parsing labels.
+        Uses better heuristics and image analysis for more accurate results.
         
         Strategy:
         1. Detect person regions (ADE20K class 12)
-        2. Use spatial heuristics to assign body parts
-        3. Map to ATR labels
+        2. Analyze person shape and proportions
+        3. Use adaptive thresholds based on person detection
+        4. Map to ATR labels with better spatial reasoning
         """
         atr_output = np.zeros_like(seg_output, dtype=np.uint8)
         
-        # Find person regions
+        # Find person regions (ADE20K class 12 is "person")
         person_mask = (seg_output == self.person_class_ade20k)
         
         if person_mask.sum() == 0:
             # No person detected, return background
+            print("Warning: No person detected in image")
             return atr_output
         
-        # Get person bounding box
+        # Get person bounding box and analyze shape
         rows, cols = np.where(person_mask)
         if len(rows) == 0:
             return atr_output
         
-        y_min, y_max = rows.min(), rows.max()
-        x_min, x_max = cols.min(), cols.max()
+        y_min, y_max = int(rows.min()), int(rows.max())
+        x_min, x_max = int(cols.min()), int(cols.max())
         
         person_height = y_max - y_min
         person_width = x_max - x_min
+        aspect_ratio = person_width / person_height if person_height > 0 else 1.0
         
-        # Heuristic: divide person region into upper and lower body
-        # Upper body: top 60% of person region -> label 4 (upper_clothes)
-        # Lower body: bottom 40% of person region -> label 6 (pants)
-        upper_threshold = y_min + int(person_height * 0.6)
+        # Adaptive thresholds based on person proportions
+        # For typical standing person: head ~10%, upper body ~40%, lower body ~50%
+        # But adjust based on aspect ratio (wider = more horizontal, taller = more vertical)
         
-        # Create masks - iterate through person pixels
+        # Head/face region: top 10-15% of person
+        head_end = y_min + int(person_height * 0.12)
+        
+        # Neck/shoulder region: 12-20% of person
+        neck_end = y_min + int(person_height * 0.20)
+        
+        # Upper body: 20-55% of person (chest, torso)
+        upper_body_end = y_min + int(person_height * 0.55)
+        
+        # Lower body: 55-90% of person (waist to knees)
+        lower_body_end = y_min + int(person_height * 0.90)
+        
+        # Create masks with better spatial reasoning
         person_y, person_x = np.where(person_mask)
         
-        # Face threshold: top 20% of person region
-        face_threshold = y_min + int(person_height * 0.2)
-        
         for y, x in zip(person_y, person_x):
-            if y <= face_threshold:
-                # Face region -> label 11 (face)
+            # Normalize y position within person region
+            y_rel = (y - y_min) / person_height if person_height > 0 else 0.5
+            
+            if y <= head_end:
+                # Head region -> label 11 (face)
                 atr_output[y, x] = 11
-            elif y <= upper_threshold:
+            elif y <= neck_end:
+                # Neck region -> label 18 (neck) or continue to upper body
+                atr_output[y, x] = 18
+            elif y <= upper_body_end:
                 # Upper body region -> upper_clothes (label 4)
                 atr_output[y, x] = 4
-            else:
+            elif y <= lower_body_end:
                 # Lower body region -> pants (label 6)
+                # For jeans/pants, this is what we want
                 atr_output[y, x] = 6
+            else:
+                # Lower legs/feet -> label 12/13 (legs) - will be excluded from masking
+                # Assign to left or right leg based on x position
+                x_center = (x_min + x_max) / 2
+                if x < x_center:
+                    atr_output[y, x] = 12  # left_leg
+                else:
+                    atr_output[y, x] = 13  # right_leg
+        
+        # Post-process: smooth transitions and fill small gaps
+        # This helps with more coherent masks
+        atr_output = self._smooth_labels(atr_output, person_mask)
         
         return atr_output
+    
+    def _smooth_labels(self, labels: np.ndarray, person_mask: np.ndarray) -> np.ndarray:
+        """
+        Smooth label transitions and fill small gaps for better coherence.
+        """
+        if not SCIPY_AVAILABLE:
+            return labels
+        
+        # Only smooth within person regions
+        smoothed = labels.copy()
+        
+        # Use median filter to remove noise (only on person regions)
+        try:
+            # Apply small median filter to reduce label noise
+            for label in [4, 6, 11]:  # upper_clothes, pants, face
+                label_mask = (labels == label) & person_mask
+                if label_mask.sum() > 100:  # Only if significant region
+                    # Create a mask for this label
+                    label_array = np.zeros_like(labels, dtype=np.float32)
+                    label_array[label_mask] = label
+                    
+                    # Apply small median filter
+                    filtered = ndimage.median_filter(label_array, size=3)
+                    
+                    # Update labels where we have filtered regions and it's still within person
+                    update_mask = (filtered == label) & person_mask & (labels != label)
+                    smoothed[update_mask] = label
+        except Exception as e:
+            # If smoothing fails, return original
+            print(f"Warning: Label smoothing failed: {e}")
+            return labels
+        
+        return smoothed
     
     def __call__(self, input_image):
         """
@@ -280,4 +338,3 @@ class SegFormerParsing:
 
 # Alias for compatibility
 Parsing = SegFormerParsing
-

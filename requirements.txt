@@ -21,6 +21,7 @@ einops>=0.3.0
 
 # Utilities
 tqdm>=4.62.0
+scipy>=1.7.0  # For label smoothing
 
 # Note: mmcv-full is removed - not needed for SegFormer and causes build issues
 # If you need mmcv, install separately after torch:
