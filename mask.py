@@ -119,7 +119,7 @@ def save_image(img: Image.Image, path: str):
 
 def masked_image(mask_type: str, imagepath: str, output_path: str = None, 
                  width: int = 576, height: int = 768, device_index: int = 0, 
-                 preserve_resolution: bool = True) -> str:
+                 preserve_resolution: bool = True, debug: bool = False) -> str:
     """
     Create a masked image based on mask_type using SegFormer B5 for parsing.
     
@@ -198,6 +198,22 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
         # Check if parsing result is valid
         if model_parse is None:
             raise ValueError("Parsing returned None")
+        
+        # Debug: Save parsing visualization
+        if debug:
+            parse_array = np.array(model_parse)
+            unique_labels = np.unique(parse_array)
+            print(f"Debug: Detected labels: {unique_labels}")
+            print(f"Debug: Label counts:")
+            for label in unique_labels:
+                count = np.sum(parse_array == label)
+                label_name = parsing.LABEL_MAPPING.get(int(label), f"unknown_{label}")
+                print(f"  Label {label} ({label_name}): {count} pixels")
+            
+            # Save parsing visualization
+            debug_path = Path(output_path).parent / f"{Path(output_path).stem}_parsing_debug.png" if output_path else Path(imagepath).parent / f"{Path(imagepath).stem}_parsing_debug.png"
+            model_parse.save(str(debug_path))
+            print(f"Debug: Parsing visualization saved to {debug_path}")
         
         # Create rectangle mask from body parts at processing resolution
         square_mask_combined = create_rectangle_mask_from_body_parts(
@@ -280,6 +296,8 @@ if __name__ == "__main__":
                        help="Preserve input image resolution in output (default: True)")
     parser.add_argument("--no_preserve_resolution", dest="preserve_resolution", action="store_false",
                        help="Use fixed width/height for output instead of preserving input resolution")
+    parser.add_argument("--debug", action="store_true",
+                       help="Enable debug mode: show detected labels and save parsing visualization")
     
     args = parser.parse_args()
     
@@ -291,7 +309,8 @@ if __name__ == "__main__":
             width=args.width,
             height=args.height,
             device_index=args.device,
-            preserve_resolution=args.preserve_resolution
+            preserve_resolution=args.preserve_resolution,
+            debug=args.debug
         )
         print(f"Masked image saved to: {result_path}")
     except Exception as e:
