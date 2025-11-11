@@ -88,14 +88,10 @@ def init_preprocessors(use_gpu_device: int = 0):
     except Exception as e:
         raise RuntimeError(f"Preprocessors not available: {e}")
     
+    # OpenPose is optional - will use fallback if not available
     openpose = OpenPose(use_gpu_device)
-    try:
-        if hasattr(openpose, 'preprocessor') and hasattr(openpose.preprocessor, 'body_estimation'):
-            openpose.preprocessor.body_estimation.model.to('cuda')
-    except Exception:
-        # If CUDA not available, we proceed
-        pass
     
+    # SegFormer parsing is required
     parsing = SegFormerParsing(use_gpu_device)
     
     return openpose, parsing
