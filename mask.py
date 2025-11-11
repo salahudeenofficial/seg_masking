@@ -203,12 +203,22 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
         if debug:
             parse_array = np.array(model_parse)
             unique_labels = np.unique(parse_array)
-            print(f"Debug: Detected labels: {unique_labels}")
-            print(f"Debug: Label counts:")
+            print(f"\n{'='*60}")
+            print(f"DEBUG: Parsing Analysis")
+            print(f"{'='*60}")
+            print(f"Detected labels: {unique_labels}")
+            print(f"Label counts:")
+            # Get label mapping from parsing class
+            try:
+                label_mapping = parsing.LABEL_MAPPING
+            except AttributeError:
+                label_mapping = {}
+            
             for label in unique_labels:
                 count = np.sum(parse_array == label)
-                label_name = parsing.LABEL_MAPPING.get(int(label), f"unknown_{label}")
-                print(f"  Label {label} ({label_name}): {count} pixels")
+                label_name = label_mapping.get(int(label), f"unknown_{label}")
+                print(f"  Label {label:2d} ({label_name:15s}): {count:8d} pixels")
+            print(f"{'='*60}\n")
             
             # Save parsing visualization
             debug_path = Path(output_path).parent / f"{Path(output_path).stem}_parsing_debug.png" if output_path else Path(imagepath).parent / f"{Path(imagepath).stem}_parsing_debug.png"
