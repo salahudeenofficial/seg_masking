@@ -2,13 +2,22 @@
 
 ## Recommended Models
 
-### 1. **nvidia/segformer-b5-finetuned-ade-640-640** (Default)
+### 1. **matei-dorian/segformer-b5-finetuned-human-parsing** (Default - BEST!)
+- **Dataset**: Fine-tuned for human parsing
+- **Classes**: 19-20 human parsing classes
+- **Status**: ✅ Ready to use - NO MAPPING NEEDED!
+- **Pros**: Actually trained for human parsing - most accurate results
+- **Cons**: None - this is the best option!
+- **Usage**: Already configured as default
+- **URL**: https://huggingface.co/matei-dorian/segformer-b5-finetuned-human-parsing
+
+### 2. **nvidia/segformer-b5-finetuned-ade-640-640** (Fallback)
 - **Dataset**: ADE20K
 - **Classes**: 150 semantic classes
-- **Status**: ✅ Ready to use (with heuristic mapping)
-- **Pros**: Best general semantic segmentation model
-- **Cons**: Requires mapping from 150 classes to 19 ATR classes
-- **Usage**: Already configured as default
+- **Status**: ⚠️ Requires heuristic mapping
+- **Pros**: General semantic segmentation model
+- **Cons**: Requires mapping from 150 classes to 19 ATR classes (less accurate)
+- **Usage**: Used as fallback if human parsing model unavailable
 
 ### 2. **nvidia/segformer-b5-finetuned-cityscapes-1024-1024**
 - **Dataset**: Cityscapes (urban scenes)

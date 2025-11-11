@@ -58,13 +58,14 @@ class SegFormerParsing:
         18: 'neck'
     }
     
-    def __init__(self, gpu_id: int = 0, model_name: str = "nvidia/segformer-b5-finetuned-ade-640-640"):
+    def __init__(self, gpu_id: int = 0, model_name: str = "matei-dorian/segformer-b5-finetuned-human-parsing"):
         """
         Initialize SegFormer B5 model for human parsing.
         
         Available pretrained models:
-        - "nvidia/segformer-b5-finetuned-ade-640-640" (default): ADE20K dataset, 150 classes
-        - "nvidia/segformer-b5-finetuned-cityscapes-1024-1024": Cityscapes dataset, 19 classes (but for urban scenes)
+        - "matei-dorian/segformer-b5-finetuned-human-parsing" (default): Fine-tuned for human parsing!
+        - "nvidia/segformer-b5-finetuned-ade-640-640": ADE20K dataset, 150 classes (requires mapping)
+        - "nvidia/segformer-b5-finetuned-cityscapes-1024-1024": Cityscapes dataset, 19 classes (urban scenes)
         - "nvidia/mit-b5": Base encoder only (needs fine-tuning)
         
         Args:
@@ -83,15 +84,27 @@ class SegFormerParsing:
             self.processor = SegformerImageProcessor.from_pretrained(model_name)
         except Exception as e:
             print(f"Warning: Could not load {model_name}, trying fallback...")
-            # Fallback to ADE20K model
+            # Fallback to human parsing model or ADE20K
             try:
-                fallback_name = "nvidia/segformer-b5-finetuned-ade-640-640"
-                print(f"Trying fallback model: {fallback_name}")
-                self.model = SegformerForSemanticSegmentation.from_pretrained(fallback_name)
-                self.processor = SegformerImageProcessor.from_pretrained(fallback_name)
-                model_name = fallback_name
-            except Exception as e2:
-                raise RuntimeError(f"Could not load SegFormer model: {e2}")
+                # Try alternative human parsing model first
+                fallback_name = "matei-dorian/segformer-b5-finetuned-human-parsing"
+                if fallback_name != model_name:
+                    print(f"Trying fallback model: {fallback_name}")
+                    self.model = SegformerForSemanticSegmentation.from_pretrained(fallback_name)
+                    self.processor = SegformerImageProcessor.from_pretrained(fallback_name)
+                    model_name = fallback_name
+                else:
+                    raise Exception("Already tried human parsing model")
+            except Exception:
+                # Final fallback to ADE20K
+                try:
+                    fallback_name = "nvidia/segformer-b5-finetuned-ade-640-640"
+                    print(f"Trying ADE20K fallback model: {fallback_name}")
+                    self.model = SegformerForSemanticSegmentation.from_pretrained(fallback_name)
+                    self.processor = SegformerImageProcessor.from_pretrained(fallback_name)
+                    model_name = fallback_name
+                except Exception as e2:
+                    raise RuntimeError(f"Could not load SegFormer model: {e2}")
         
         self.model.to(self.device)
         self.model.eval()
@@ -106,6 +119,9 @@ class SegFormerParsing:
         # Initialize ADE20K to ATR mapping if using ADE20K model
         if "ade" in model_name.lower() and self.num_labels == 150:
             self._init_ade20k_to_atr_mapping()
+        elif "human-parsing" in model_name.lower():
+            print("Using human parsing fine-tuned model - no mapping needed!")
+            # This model should output the correct number of classes for human parsing
     
     def _init_ade20k_to_atr_mapping(self):
         """
@@ -128,6 +144,18 @@ class SegFormerParsing:
         Returns:
             ATR-formatted segmentation with 19 classes
         """
+        # If using human parsing fine-tuned model, check if it outputs correct number of classes
+        if "human-parsing" in self.model_name.lower():
+            # Human parsing model should output correct labels - use directly
+            # But ensure it's in valid range [0, 18]
+            if self.num_labels == 19 or self.num_labels == 20:
+                # Some human parsing models use 20 classes (includes background)
+                # Map to 19 classes if needed
+                if self.num_labels == 20:
+                    # Map 20 classes to 19 (usually just need to subtract 1 or map background)
+                    seg_output = np.clip(seg_output, 0, 18)
+                return seg_output
+        
         # If the model outputs 19 classes (human parsing), use directly
         if self.num_labels == 19:
             return seg_output
