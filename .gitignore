@@ -53,8 +53,11 @@ transformers_cache/
 *.png
 *.bmp
 *.tiff
+# Allow test images
 !test_*.jpg
 !example_*.jpg
+!test_*.png
+!example_*.png
 
 # Logs
 *.log
