@@ -20,17 +20,18 @@ sys.path.insert(0, str(project_root / "preprocess" / "humanparsing"))
 _preprocessors_cache = None
 
 
-def create_rectangle_mask_from_body_parts(model_parse: Image.Image, category: str, width: int, height: int) -> Image.Image:
+def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: int, height: int):
     """
-    Create a rectangle mask covering each body part detected in the parsing result.
-    Each body part gets its own rectangle (bounding box), then all rectangles are combined.
-    Excludes shoes and feet from masking.
+    Get the bounding box coordinates of clothing parts detected in the parsing result.
+    Returns the combined bounding box that covers all relevant clothing parts.
+    
+    Returns:
+        tuple: (x_min, y_min, x_max, y_max) or None if no clothing detected
     """
     parse_array = np.array(model_parse.resize((width, height), Image.NEAREST))
-    rectangle_mask = np.zeros((height, width), dtype=np.uint8)
     
     # Exclude shoe/feet labels: 9 (left_shoe), 10 (right_shoe)
-    excluded_labels = {9, 10}  # Never mask shoes
+    excluded_labels = {9, 10}  # Never include shoes
     
     # Define body parts to mask based on category (excluding shoes/feet)
     # Note: Label 7 (dress) is a full-body garment and should NOT be included in 
@@ -47,31 +48,48 @@ def create_rectangle_mask_from_body_parts(model_parse: Image.Image, category: st
     # Remove any excluded labels if they accidentally appear
     body_part_labels = [label for label in body_part_labels if label not in excluded_labels]
     
-    # Process each body part label
+    # Collect all pixels from all relevant body parts
+    all_rows = []
+    all_cols = []
+    
     for label in body_part_labels:
         part_mask = (parse_array == label).astype(np.uint8)
         if part_mask.sum() == 0:
             continue
         
-        # Find bounding box of this body part
+        # Find pixels of this body part
         rows, cols = np.where(part_mask > 0)
-        if len(rows) == 0 or len(cols) == 0:
-            continue
-        
-        y_min, y_max = int(rows.min()), int(rows.max())
-        x_min, x_max = int(cols.min()), int(cols.max())
-        
-        # Ensure bounding box stays within image bounds
-        rect_x_min = max(0, x_min)
-        rect_x_max = min(width, x_max + 1)
-        rect_y_min = max(0, y_min)
-        rect_y_max = min(height, y_max + 1)
-        
-        # Draw filled rectangle for this body part
-        if rect_x_max > rect_x_min and rect_y_max > rect_y_min:
-            cv2.rectangle(rectangle_mask, (rect_x_min, rect_y_min), (rect_x_max - 1, rect_y_max - 1), 255, -1)
+        if len(rows) > 0 and len(cols) > 0:
+            all_rows.extend(rows)
+            all_cols.extend(cols)
     
-    return Image.fromarray(rectangle_mask, mode='L')
+    # If no clothing detected, return None
+    if len(all_rows) == 0 or len(all_cols) == 0:
+        return None
+    
+    # Get combined bounding box
+    y_min, y_max = int(min(all_rows)), int(max(all_rows))
+    x_min, x_max = int(min(all_cols)), int(max(all_cols))
+    
+    # Ensure bounding box stays within image bounds
+    rect_x_min = max(0, x_min)
+    rect_x_max = min(width, x_max + 1)
+    rect_y_min = max(0, y_min)
+    rect_y_max = min(height, y_max + 1)
+    
+    # Add some padding (5% on each side, minimum 10 pixels)
+    padding_x = max(10, int((rect_x_max - rect_x_min) * 0.05))
+    padding_y = max(10, int((rect_y_max - rect_y_min) * 0.05))
+    
+    rect_x_min = max(0, rect_x_min - padding_x)
+    rect_x_max = min(width, rect_x_max + padding_x)
+    rect_y_min = max(0, rect_y_min - padding_y)
+    rect_y_max = min(height, rect_y_max + padding_y)
+    
+    if rect_x_max > rect_x_min and rect_y_max > rect_y_min:
+        return (rect_x_min, rect_y_min, rect_x_max, rect_y_max)
+    
+    return None
 
 
 def resize_panel(img: Image.Image, width: int, height: int) -> Image.Image:
@@ -120,19 +138,19 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
                  width: int = 576, height: int = 768, device_index: int = 0, 
                  preserve_resolution: bool = True, debug: bool = False) -> str:
     """
-    Create a masked image based on mask_type using SegFormer B5 for parsing.
+    Crop clothing region from image based on mask_type using SegFormer B5 for parsing.
     
     Args:
         mask_type: One of 'upper_body', 'lower_body', or 'other'
         imagepath: Path to the input image
-        output_path: Optional path for output image. If None, saves next to input with '_masked' suffix
+        output_path: Optional path for output image. If None, saves next to input with '_cropped' suffix
         width: Working resolution width for processing (default: 576). Only used if preserve_resolution=False
         height: Working resolution height for processing (default: 768). Only used if preserve_resolution=False
         device_index: GPU device index (default: 0)
-        preserve_resolution: If True, output will match input image resolution. If False, uses width/height (default: True)
+        preserve_resolution: If True, output will be cropped from original resolution. If False, uses width/height (default: True)
     
     Returns:
-        Path to the masked image (or original image path if mask_type is 'other')
+        Path to the cropped clothing image (or original image path if mask_type is 'other')
     
     Raises:
         FileNotFoundError: If input image doesn't exist
@@ -216,49 +234,55 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
             model_parse.save(str(debug_path))
             print(f"Debug: Parsing visualization saved to {debug_path}")
         
-        # Create rectangle mask from body parts at processing resolution
-        square_mask_combined = create_rectangle_mask_from_body_parts(
+        # Get bounding box of clothing at processing resolution
+        bbox = get_clothing_bounding_box(
             model_parse=model_parse,
             category=mask_type,
             width=process_width,
             height=process_height,
         )
         
-        # Check if mask is empty (no body parts detected)
-        mask_array = np.array(square_mask_combined)
-        if mask_array.sum() == 0:
-            raise ValueError("No body parts detected in parsing result - mask is empty")
+        # Check if clothing detected
+        if bbox is None:
+            raise ValueError("No clothing parts detected in parsing result")
         
-        # Scale mask back to original resolution if preserving resolution
+        x_min, y_min, x_max, y_max = bbox
+        
+        # Scale bounding box to original resolution if preserving resolution
         if preserve_resolution and (process_width != original_width or process_height != original_height):
-            square_mask_combined = square_mask_combined.resize(
-                (original_width, original_height), 
-                Image.NEAREST  # Use nearest neighbor to preserve mask boundaries
-            )
+            scale_x = original_width / process_width
+            scale_y = original_height / process_height
+            x_min = int(x_min * scale_x)
+            y_min = int(y_min * scale_y)
+            x_max = int(x_max * scale_x)
+            y_max = int(y_max * scale_y)
+            # Ensure within bounds
+            x_min = max(0, min(x_min, original_width))
+            y_min = max(0, min(y_min, original_height))
+            x_max = max(x_min, min(x_max, original_width))
+            y_max = max(y_min, min(y_max, original_height))
+        else:
+            # Use original dimensions if not preserving resolution
+            original_width, original_height = process_width, process_height
         
-        # Use original image at original resolution for final output
+        # Use original image at original resolution for cropping
         if preserve_resolution:
             person_final = person_img.convert('RGB')
-            person_np = np.array(person_final).astype(np.float32) / 255.0
         else:
-            person_np = np.array(person_r.convert('RGB')).astype(np.float32) / 255.0
+            person_final = person_r.convert('RGB')
         
-        # Rectangle mask from body parts: use this for green visualization
-        square_mask_np = np.array(square_mask_combined.convert('L')).astype(np.float32) / 255.0
-        square_mask_3 = np.repeat(square_mask_np[:, :, None], 3, axis=2)
-        
-        # control_image (masked person): green where garment IS (square_mask_3=1.0), person where visible (square_mask_3=0.0)
-        green_color = np.array([0.0, 1.0, 0.0])  # RGB green in [0,1] range
-        # Keep person where garment is NOT (square_mask_3=0), fill green where garment IS (square_mask_3=1)
-        masked_person_np = person_np * (1.0 - square_mask_3) + green_color * square_mask_3
-        masked_person = Image.fromarray((masked_person_np * 255).astype(np.uint8))
+        # Crop the clothing region
+        if x_max > x_min and y_max > y_min:
+            cropped_clothing = person_final.crop((x_min, y_min, x_max, y_max))
+        else:
+            raise ValueError(f"Invalid bounding box: ({x_min}, {y_min}, {x_max}, {y_max})")
         
     except Exception as e:
         import traceback
         error_msg = str(e)
         error_type = type(e).__name__
         print(f"\n{'='*60}")
-        print(f"ERROR: Could not create mask")
+        print(f"ERROR: Could not crop clothing region")
         print(f"Error type: {error_type}")
         print(f"Error message: {error_msg}")
         print(f"{'='*60}")
@@ -267,17 +291,21 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
         print(f"{'='*60}\n")
         
         # Re-raise the exception to see the full error
-        raise RuntimeError(f"Masking failed: {error_type}: {error_msg}") from e
+        raise RuntimeError(f"Clothing cropping failed: {error_type}: {error_msg}") from e
     
     # Determine output path
     if output_path is None:
-        # Save next to original with '_masked' suffix
-        output_path = image_path.parent / f"{image_path.stem}_masked{image_path.suffix}"
+        # Save next to original with '_cropped' suffix
+        output_path = image_path.parent / f"{image_path.stem}_cropped{image_path.suffix}"
     else:
         output_path = Path(output_path)
     
-    # Save the masked image
-    save_image(masked_person, str(output_path))
+    # Save the cropped clothing image
+    save_image(cropped_clothing, str(output_path))
+    
+    if debug:
+        print(f"Cropped clothing region: ({x_min}, {y_min}) to ({x_max}, {y_max})")
+        print(f"Cropped image size: {cropped_clothing.size[0]}x{cropped_clothing.size[1]}")
     
     return str(output_path)
 
@@ -285,7 +313,7 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Create masked image using SegFormer B5")
+    parser = argparse.ArgumentParser(description="Crop clothing region from image using SegFormer B5")
     parser.add_argument("--mask_type", choices=['upper_body', 'lower_body', 'other'],
                        help="Type of mask to apply")
     parser.add_argument("--imagepath", help="Path to input image")
@@ -313,7 +341,7 @@ if __name__ == "__main__":
             preserve_resolution=args.preserve_resolution,
             debug=args.debug
         )
-        print(f"Masked image saved to: {result_path}")
+        print(f"Cropped clothing image saved to: {result_path}")
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
