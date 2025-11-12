@@ -81,7 +81,12 @@ def resize_panel(img: Image.Image, width: int, height: int) -> Image.Image:
 
 
 def init_preprocessors(use_gpu_device: int = 0):
-    """Initialize OpenPose and SegFormer Parsing preprocessors."""
+    """
+    Initialize OpenPose and SegFormer Parsing preprocessors.
+    
+    Note: OpenPose is OPTIONAL and not used in the masking logic.
+    Only SegFormer parsing is required for masking.
+    """
     try:
         from preprocess.humanparsing.run_parsing import SegFormerParsing
         from preprocess.openpose.run_openpose import OpenPose
@@ -89,9 +94,15 @@ def init_preprocessors(use_gpu_device: int = 0):
         raise RuntimeError(f"Preprocessors not available: {e}")
     
     # OpenPose is optional - will use fallback if not available
-    openpose = OpenPose(use_gpu_device)
+    # NOTE: OpenPose results are NOT used in masking - only kept for compatibility
+    try:
+        openpose = OpenPose(use_gpu_device)
+    except Exception as e:
+        # If OpenPose fails to initialize, create a dummy object
+        print(f"Warning: OpenPose initialization failed (optional): {e}")
+        openpose = None
     
-    # SegFormer parsing is required
+    # SegFormer parsing is REQUIRED for masking
     parsing = SegFormerParsing(use_gpu_device)
     
     return openpose, parsing
@@ -178,15 +189,19 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
     
     # Apply masking
     try:
-        # Get keypoints and parsing
-        try:
-            keypoints = openpose(person_r)
-        except Exception as e:
-            print(f"ERROR: OpenPose failed: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+        # Get keypoints (optional - not used in masking, but kept for compatibility)
+        # OpenPose is NOT required for masking - SegFormer parsing is sufficient
+        keypoints = None
+        if openpose is not None:
+            try:
+                keypoints = openpose(person_r)
+            except Exception as e:
+                # OpenPose is optional - just warn and continue
+                if debug:
+                    print(f"Warning: OpenPose failed (optional): {type(e).__name__}: {e}")
+                keypoints = None
         
+        # SegFormer parsing is required for masking
         try:
             model_parse, face_mask = parsing(person_r)
         except Exception as e:
