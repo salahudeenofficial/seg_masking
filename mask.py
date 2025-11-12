@@ -288,8 +288,19 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
             raise
         
         # Check if parsing result is valid
+        # If parsing failed, save original image as output
         if model_parse is None:
-            raise ValueError("Parsing returned None")
+            if debug:
+                print(f"Warning: Parsing returned None. Saving original image.")
+            # Determine output path
+            if output_path is None:
+                output_path = image_path.parent / f"{image_path.stem}_cropped{image_path.suffix}"
+            else:
+                output_path = Path(output_path)
+            
+            # Save original image as fallback
+            save_image(person_img.convert('RGB'), str(output_path))
+            return str(output_path)
         
         # Debug: Save parsing visualization
         if debug:
@@ -327,8 +338,19 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
         )
         
         # Check if clothing detected
+        # If no clothing detected, save original image as output
         if bbox is None:
-            raise ValueError("No clothing parts detected in parsing result")
+            if debug:
+                print(f"Warning: No clothing parts detected for {mask_type}. Saving original image.")
+            # Determine output path
+            if output_path is None:
+                output_path = image_path.parent / f"{image_path.stem}_cropped{image_path.suffix}"
+            else:
+                output_path = Path(output_path)
+            
+            # Save original image as fallback
+            save_image(person_img.convert('RGB'), str(output_path))
+            return str(output_path)
         
         x_min, y_min, x_max, y_max = bbox
         
@@ -376,10 +398,21 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
             person_final = person_r.convert('RGB')
         
         # Crop the clothing region
+        # If invalid bounding box, save original image as output
         if x_max > x_min and y_max > y_min:
             cropped_clothing = person_final.crop((x_min, y_min, x_max, y_max))
         else:
-            raise ValueError(f"Invalid bounding box: ({x_min}, {y_min}, {x_max}, {y_max})")
+            if debug:
+                print(f"Warning: Invalid bounding box: ({x_min}, {y_min}, {x_max}, {y_max}). Saving original image.")
+            # Determine output path
+            if output_path is None:
+                output_path = image_path.parent / f"{image_path.stem}_cropped{image_path.suffix}"
+            else:
+                output_path = Path(output_path)
+            
+            # Save original image as fallback
+            save_image(person_final, str(output_path))
+            return str(output_path)
         
     except Exception as e:
         import traceback
