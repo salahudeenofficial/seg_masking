@@ -1,6 +1,6 @@
 # Mask SegFormer - Alternative Human Parsing with SegFormer B5
 
-This is an alternative masking approach that uses **SegFormer B5** for human parsing instead of the ATR parsing model. Everything else remains the same (OpenPose, masking logic, etc.).
+This is an alternative masking approach that uses **SegFormer B5** for human parsing instead of the ATR parsing model. Masking is performed entirely using SegFormer parsing - no OpenPose or other pose detection is required.
 
 ## Key Differences
 
@@ -34,8 +34,8 @@ The current implementation uses a general SegFormer B5 model (trained on ADE20K)
 
 - ✅ SegFormer B5 integration structure complete
 - ✅ Same API as original masking code
+- ✅ No OpenPose dependencies required - pure SegFormer-based masking
 - ⚠️ Class mapping needs implementation (or use fine-tuned model)
-- ⚠️ OpenPose dependencies need to be available from parent `mask_gpu` directory
 
 ## Usage
 
@@ -53,6 +53,5 @@ result = masked_image(
 ## Architecture
 
 - **SegFormer B5**: For human parsing (replaces ATR parsing)
-- **OpenPose**: Same as original (for body keypoints)
-- **Masking Logic**: Same rectangle mask creation from body parts
+- **Masking Logic**: Rectangle mask creation from body parts detected by SegFormer
 

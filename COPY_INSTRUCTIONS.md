@@ -12,8 +12,7 @@ mask_segformer/
 ├── setup.sh                  # Setup script
 ├── test_all.sh               # Test script
 ├── preprocess/                # Preprocessing modules
-│   ├── humanparsing/
-│   └── openpose/
+│   └── humanparsing/
 ├── test_images/              # Test images
 ├── README.md                 # Documentation
 ├── INSTALL.md                # Installation guide

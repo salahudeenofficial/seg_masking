@@ -15,8 +15,6 @@ mask_segformer/
 ├── preprocess/
 │   ├── humanparsing/
 │   │   └── run_parsing.py
-│   └── openpose/
-│       └── run_openpose.py
 ├── test_images/                # Optional - for testing
 └── [all .md documentation files]
 ```
@@ -48,8 +46,6 @@ mask_segformer/
 ├── preprocess/
 │   ├── humanparsing/
 │   │   └── run_parsing.py
-│   └── openpose/
-│       └── run_openpose.py
 └── __init__.py files
 ```
 

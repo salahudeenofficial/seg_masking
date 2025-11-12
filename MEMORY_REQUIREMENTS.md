@@ -14,52 +14,48 @@ This document covers both **GPU VRAM** and **System RAM** requirements for runni
 |-----------|------------|-------|
 | **SegFormer B5 Model** | ~2-3 GB | Model weights + activations |
 | **SegFormer Inference** | +1-2 GB | During forward pass |
-| **OpenPose Model** | ~1-2 GB | Body pose detection |
 | **Image Buffers** | ~0.5-1 GB | Per image in batch |
 | **CUDA Overhead** | ~0.5 GB | Framework overhead |
 
 ### Total VRAM by Use Case
 
 #### Single Image Processing
+- **Minimum**: 4 GB VRAM
+- **Recommended**: 6 GB VRAM
+- **Comfortable**: 8 GB VRAM
+
+#### Batch Processing (4 images)
 - **Minimum**: 6 GB VRAM
 - **Recommended**: 8 GB VRAM
 - **Comfortable**: 12 GB VRAM
 
-#### Batch Processing (4 images)
-- **Minimum**: 10 GB VRAM
+#### Batch Processing (8 images)
+- **Minimum**: 8 GB VRAM
 - **Recommended**: 12 GB VRAM
 - **Comfortable**: 16 GB VRAM
-
-#### Batch Processing (8 images)
-- **Minimum**: 16 GB VRAM
-- **Recommended**: 20 GB VRAM
-- **Comfortable**: 24 GB VRAM
 
 ### VRAM Usage Breakdown
 
 ```
 Single Image:
 ├── SegFormer B5:        2-3 GB
-├── OpenPose:            1-2 GB
 ├── Image Processing:    0.5 GB
 ├── CUDA Overhead:       0.5 GB
-└── Total:               ~6 GB
+└── Total:               ~4 GB
 
 Batch of 4:
 ├── SegFormer B5:        2-3 GB (shared)
-├── OpenPose:            1-2 GB (shared)
 ├── Image Processing:    2 GB (4 × 0.5 GB)
 ├── Batch Buffers:       2-3 GB
 ├── CUDA Overhead:       0.5 GB
-└── Total:              ~10-12 GB
+└── Total:              ~6-8 GB
 
 Batch of 8:
 ├── SegFormer B5:        2-3 GB (shared)
-├── OpenPose:            1-2 GB (shared)
 ├── Image Processing:    4 GB (8 × 0.5 GB)
 ├── Batch Buffers:       4-6 GB
 ├── CUDA Overhead:       0.5 GB
-└── Total:              ~16-20 GB
+└── Total:              ~12-16 GB
 ```
 
 ---
@@ -275,17 +271,17 @@ if mem_after > mem_before * 1.1:  # 10% increase
 ## Example Memory Usage Scenarios
 
 ### Scenario 1: Single Image (1080x1440)
-- **VRAM**: ~6 GB
+- **VRAM**: ~4 GB
 - **RAM**: ~4 GB
 - **Processing Time**: ~2-3 seconds
 
 ### Scenario 2: Batch of 10 Images
-- **VRAM**: ~12 GB
+- **VRAM**: ~8 GB
 - **RAM**: ~8 GB
 - **Processing Time**: ~15-20 seconds
 
 ### Scenario 3: Large Dataset (1000 images)
-- **VRAM**: ~8 GB (sequential processing)
+- **VRAM**: ~6 GB (sequential processing)
 - **RAM**: ~12 GB (with chunking)
 - **Processing Time**: ~30-45 minutes
 
@@ -294,12 +290,12 @@ if mem_after > mem_before * 1.1:  # 10% increase
 ## Summary
 
 ### Minimum Requirements
-- **VRAM**: 8 GB
+- **VRAM**: 6 GB
 - **RAM**: 8 GB
 - **GPU**: RTX 3060 or better
 
 ### Recommended Requirements
-- **VRAM**: 12-16 GB
+- **VRAM**: 8-12 GB
 - **RAM**: 16-32 GB
 - **GPU**: RTX 3080/3090 or better
 

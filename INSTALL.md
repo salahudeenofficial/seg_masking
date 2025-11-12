@@ -123,7 +123,6 @@ python mask.py --mask_type upper_body --imagepath test.jpg
 - **Pillow**: Image loading/saving
 - **opencv-python**: Image processing
 - **numpy**: Numerical operations
-- **einops**: Tensor operations (for OpenPose)
 
 ### Optional
 - **timm**: Additional model utilities (not strictly required)

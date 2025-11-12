@@ -54,13 +54,10 @@
 - **VRAM Usage**: ~2-4GB for inference
 - **Batch Processing**: +1-2GB per additional image in batch
 
-### OpenPose
-- **VRAM Usage**: ~1-2GB
-
 ### Total VRAM Needed
 - **Single Image**: ~4-6GB
-- **Batch of 4**: ~8-12GB
-- **Batch of 8**: ~16-20GB
+- **Batch of 4**: ~6-8GB
+- **Batch of 8**: ~12-16GB
 
 ## Vast.ai Search Filters
 
