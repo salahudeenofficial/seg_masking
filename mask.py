@@ -20,7 +20,7 @@ sys.path.insert(0, str(project_root / "preprocess" / "humanparsing"))
 _preprocessors_cache = None
 
 
-def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: int, height: int):
+def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: int, height: int, debug: bool = False):
     """
     Get precise bounding box coordinates of clothing parts detected in the parsing result.
     Returns a tight bounding box that minimizes non-target areas.
@@ -28,7 +28,12 @@ def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: in
     Returns:
         tuple: (x_min, y_min, x_max, y_max) or None if no clothing detected
     """
-    parse_array = np.array(model_parse.resize((width, height), Image.NEAREST))
+    # Resize parse to processing dimensions
+    parse_resized = model_parse.resize((width, height), Image.NEAREST)
+    parse_array = np.array(parse_resized)
+    
+    if debug:
+        print(f"DEBUG: parse_array shape: {parse_array.shape}, unique labels: {np.unique(parse_array)}")
     
     # Exclude shoe/feet labels: 9 (left_shoe), 10 (right_shoe)
     excluded_labels = {9, 10}  # Never include shoes
@@ -38,34 +43,62 @@ def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: in
     # upper_body or lower_body masking - it would mask the entire body
     if category == "upper_body":
         target_labels = [4]  # upper_clothes only (exclude dress 7 - it's full body)
-        # Exclude other body parts that shouldn't be in upper body crop
+        # STRICTLY exclude lower_body labels (5=skirt, 6=pants) and all other non-target labels
         exclude_labels = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}
+        opposite_labels = [5, 6]  # Explicitly exclude lower body labels
     elif category == "lower_body":
         target_labels = [5, 6]  # skirt, pants (excluded legs 12,13 to avoid feet, exclude dress 7)
-        # Exclude other body parts that shouldn't be in lower body crop
-        exclude_labels = {0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18}
+        # STRICTLY exclude upper_body label (4=upper_clothes) and all other non-target labels
+        exclude_labels = {0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}
+        opposite_labels = [4]  # Explicitly exclude upper body label
     elif category == "dresses":
         target_labels = [4, 5, 6, 7]  # upper_clothes, skirt, pants, dress
         exclude_labels = {9, 10}  # Only exclude shoes
+        opposite_labels = []  # No opposite for dresses
     else:
         target_labels = [4, 5, 6, 7]  # default: all clothing parts
         exclude_labels = {9, 10}  # Only exclude shoes
+        opposite_labels = []  # No opposite for default
     
     # Remove any excluded labels if they accidentally appear
     target_labels = [label for label in target_labels if label not in excluded_labels]
     
     # Create a mask for target clothing parts only
+    # STRICTLY exclude opposite category labels from the mask
     target_mask = np.zeros((height, width), dtype=np.uint8)
     for label in target_labels:
-        target_mask |= (parse_array == label).astype(np.uint8)
+        label_mask = (parse_array == label).astype(np.uint8)
+        target_mask |= label_mask
+    
+    # STRICTLY remove opposite category labels from the mask
+    # This ensures that pixels labeled as opposite category are excluded from bounding box
+    if opposite_labels:
+        opposite_mask = np.zeros((height, width), dtype=bool)
+        for label in opposite_labels:
+            opposite_mask |= (parse_array == label)
+        # Remove opposite category pixels from target mask
+        target_mask = np.where(opposite_mask, 0, target_mask).astype(np.uint8)
     
     # If no target clothing detected, return None
-    if target_mask.sum() == 0:
+    target_pixel_count = target_mask.sum()
+    if debug:
+        print(f"DEBUG: target_labels: {target_labels}, target_pixel_count: {target_pixel_count}")
+        if opposite_labels:
+            opposite_pixel_count = np.sum(np.isin(parse_array, opposite_labels))
+            print(f"DEBUG: opposite_labels excluded: {opposite_labels}, opposite_pixel_count: {opposite_pixel_count}")
+            print(f"DEBUG: target_pixel_count after exclusion: {target_pixel_count}")
+    if target_pixel_count == 0:
+        if debug:
+            print(f"DEBUG: No target pixels found after exclusions, returning None")
         return None
     
     # Find bounding box of target clothing only
     rows, cols = np.where(target_mask > 0)
+    if debug:
+        print(f"DEBUG: Found {len(rows)} target pixels for bounding box")
     if len(rows) == 0 or len(cols) == 0:
+        if debug:
+            print(f"DEBUG: No rows/cols found, returning None")
         return None
     
     # Get initial bounding box from target clothing pixels
@@ -85,18 +118,19 @@ def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: in
     
     # If target density is too low, try to shrink the bounding box
     # by removing rows/columns with low target density
-    if target_density < 0.3:  # If less than 30% are target labels, refine
+    # But only if we have enough pixels to work with
+    if target_density < 0.3 and target_pixel_count > 100:  # Only refine if we have enough pixels
         # Try to find a tighter bounding box
         # Find rows and columns with sufficient target density
         row_target_counts = np.sum(target_mask, axis=1)
         col_target_counts = np.sum(target_mask, axis=0)
         
-        # Find rows with target pixels (at least 5% of row width)
-        min_cols_per_row = max(1, int(width * 0.05))
+        # Find rows with target pixels (at least 1 pixel, or 1% of row width, whichever is larger)
+        min_cols_per_row = max(1, int(width * 0.01))
         valid_rows = np.where(row_target_counts >= min_cols_per_row)[0]
         
-        # Find columns with target pixels (at least 5% of column height)
-        min_rows_per_col = max(1, int(height * 0.05))
+        # Find columns with target pixels (at least 1 pixel, or 1% of column height, whichever is larger)
+        min_rows_per_col = max(1, int(height * 0.01))
         valid_cols = np.where(col_target_counts >= min_rows_per_col)[0]
         
         if len(valid_rows) > 0 and len(valid_cols) > 0:
@@ -104,6 +138,8 @@ def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: in
             y_max = int(valid_rows.max())
             x_min = int(valid_cols.min())
             x_max = int(valid_cols.max())
+            if debug:
+                print(f"DEBUG: Refined bbox from ({x_min}, {y_min}, {x_max}, {y_max})")
     
     # Ensure bounding box stays within image bounds
     rect_x_min = max(0, x_min)
@@ -121,15 +157,21 @@ def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: in
     rect_y_min = max(0, rect_y_min - padding_y)
     rect_y_max = min(height, rect_y_max + padding_y)
     
-    # Final validation: ensure the bounding box has reasonable target density
+    # Final validation: ensure the bounding box is valid
+    # Check if we have any target pixels in the final bounding box
     final_bbox_region = parse_array[rect_y_min:rect_y_max, rect_x_min:rect_x_max]
     final_target_pixels = np.sum(np.isin(final_bbox_region, target_labels))
-    final_total_pixels = final_bbox_region.size
-    final_density = final_target_pixels / final_total_pixels if final_total_pixels > 0 else 0
     
-    if rect_x_max > rect_x_min and rect_y_max > rect_y_min and final_density > 0.1:
+    if debug:
+        print(f"DEBUG: Final bbox: ({rect_x_min}, {rect_y_min}, {rect_x_max}, {rect_y_max})")
+        print(f"DEBUG: Final target pixels in bbox: {final_target_pixels}")
+    
+    # Return bounding box if valid dimensions and has target pixels
+    if rect_x_max > rect_x_min and rect_y_max > rect_y_min and final_target_pixels > 0:
         return (rect_x_min, rect_y_min, rect_x_max, rect_y_max)
     
+    if debug:
+        print(f"DEBUG: Bounding box validation failed, returning None")
     return None
 
 
@@ -281,6 +323,7 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
             category=mask_type,
             width=process_width,
             height=process_height,
+            debug=debug,
         )
         
         # Check if clothing detected
