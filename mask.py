@@ -22,8 +22,8 @@ _preprocessors_cache = None
 
 def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: int, height: int):
     """
-    Get the bounding box coordinates of clothing parts detected in the parsing result.
-    Returns the combined bounding box that covers all relevant clothing parts.
+    Get precise bounding box coordinates of clothing parts detected in the parsing result.
+    Returns a tight bounding box that minimizes non-target areas.
     
     Returns:
         tuple: (x_min, y_min, x_max, y_max) or None if no clothing detected
@@ -37,39 +37,73 @@ def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: in
     # Note: Label 7 (dress) is a full-body garment and should NOT be included in 
     # upper_body or lower_body masking - it would mask the entire body
     if category == "upper_body":
-        body_part_labels = [4]  # upper_clothes only (exclude dress 7 - it's full body)
+        target_labels = [4]  # upper_clothes only (exclude dress 7 - it's full body)
+        # Exclude other body parts that shouldn't be in upper body crop
+        exclude_labels = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}
     elif category == "lower_body":
-        body_part_labels = [5, 6]  # skirt, pants (excluded legs 12,13 to avoid feet, exclude dress 7)
+        target_labels = [5, 6]  # skirt, pants (excluded legs 12,13 to avoid feet, exclude dress 7)
+        # Exclude other body parts that shouldn't be in lower body crop
+        exclude_labels = {0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18}
     elif category == "dresses":
-        body_part_labels = [4, 5, 6, 7]  # upper_clothes, skirt, pants, dress
+        target_labels = [4, 5, 6, 7]  # upper_clothes, skirt, pants, dress
+        exclude_labels = {9, 10}  # Only exclude shoes
     else:
-        body_part_labels = [4, 5, 6, 7]  # default: all clothing parts
+        target_labels = [4, 5, 6, 7]  # default: all clothing parts
+        exclude_labels = {9, 10}  # Only exclude shoes
     
     # Remove any excluded labels if they accidentally appear
-    body_part_labels = [label for label in body_part_labels if label not in excluded_labels]
+    target_labels = [label for label in target_labels if label not in excluded_labels]
     
-    # Collect all pixels from all relevant body parts
-    all_rows = []
-    all_cols = []
+    # Create a mask for target clothing parts only
+    target_mask = np.zeros((height, width), dtype=np.uint8)
+    for label in target_labels:
+        target_mask |= (parse_array == label).astype(np.uint8)
     
-    for label in body_part_labels:
-        part_mask = (parse_array == label).astype(np.uint8)
-        if part_mask.sum() == 0:
-            continue
-        
-        # Find pixels of this body part
-        rows, cols = np.where(part_mask > 0)
-        if len(rows) > 0 and len(cols) > 0:
-            all_rows.extend(rows)
-            all_cols.extend(cols)
-    
-    # If no clothing detected, return None
-    if len(all_rows) == 0 or len(all_cols) == 0:
+    # If no target clothing detected, return None
+    if target_mask.sum() == 0:
         return None
     
-    # Get combined bounding box
-    y_min, y_max = int(min(all_rows)), int(max(all_rows))
-    x_min, x_max = int(min(all_cols)), int(max(all_cols))
+    # Find bounding box of target clothing only
+    rows, cols = np.where(target_mask > 0)
+    if len(rows) == 0 or len(cols) == 0:
+        return None
+    
+    # Get initial bounding box from target clothing pixels
+    y_min, y_max = int(rows.min()), int(rows.max())
+    x_min, x_max = int(cols.min()), int(cols.max())
+    
+    # Refine bounding box by filtering out areas with too many non-target labels
+    # This ensures the cropped region is mostly target clothing
+    bbox_height = y_max - y_min
+    bbox_width = x_max - x_min
+    
+    # Calculate target label density in the bounding box region
+    bbox_region = parse_array[y_min:y_max+1, x_min:x_max+1]
+    target_pixels_in_bbox = np.sum(np.isin(bbox_region, target_labels))
+    total_pixels_in_bbox = bbox_region.size
+    target_density = target_pixels_in_bbox / total_pixels_in_bbox if total_pixels_in_bbox > 0 else 0
+    
+    # If target density is too low, try to shrink the bounding box
+    # by removing rows/columns with low target density
+    if target_density < 0.3:  # If less than 30% are target labels, refine
+        # Try to find a tighter bounding box
+        # Find rows and columns with sufficient target density
+        row_target_counts = np.sum(target_mask, axis=1)
+        col_target_counts = np.sum(target_mask, axis=0)
+        
+        # Find rows with target pixels (at least 5% of row width)
+        min_cols_per_row = max(1, int(width * 0.05))
+        valid_rows = np.where(row_target_counts >= min_cols_per_row)[0]
+        
+        # Find columns with target pixels (at least 5% of column height)
+        min_rows_per_col = max(1, int(height * 0.05))
+        valid_cols = np.where(col_target_counts >= min_rows_per_col)[0]
+        
+        if len(valid_rows) > 0 and len(valid_cols) > 0:
+            y_min = int(valid_rows.min())
+            y_max = int(valid_rows.max())
+            x_min = int(valid_cols.min())
+            x_max = int(valid_cols.max())
     
     # Ensure bounding box stays within image bounds
     rect_x_min = max(0, x_min)
@@ -77,16 +111,23 @@ def get_clothing_bounding_box(model_parse: Image.Image, category: str, width: in
     rect_y_min = max(0, y_min)
     rect_y_max = min(height, y_max + 1)
     
-    # Add some padding (5% on each side, minimum 10 pixels)
-    padding_x = max(10, int((rect_x_max - rect_x_min) * 0.05))
-    padding_y = max(10, int((rect_y_max - rect_y_min) * 0.05))
+    # Add minimal padding (only 2-3 pixels) to avoid cutting off edges
+    # Much smaller than before to minimize non-target areas
+    padding_x = 3
+    padding_y = 3
     
     rect_x_min = max(0, rect_x_min - padding_x)
     rect_x_max = min(width, rect_x_max + padding_x)
     rect_y_min = max(0, rect_y_min - padding_y)
     rect_y_max = min(height, rect_y_max + padding_y)
     
-    if rect_x_max > rect_x_min and rect_y_max > rect_y_min:
+    # Final validation: ensure the bounding box has reasonable target density
+    final_bbox_region = parse_array[rect_y_min:rect_y_max, rect_x_min:rect_x_max]
+    final_target_pixels = np.sum(np.isin(final_bbox_region, target_labels))
+    final_total_pixels = final_bbox_region.size
+    final_density = final_target_pixels / final_total_pixels if final_total_pixels > 0 else 0
+    
+    if rect_x_max > rect_x_min and rect_y_max > rect_y_min and final_density > 0.1:
         return (rect_x_min, rect_y_min, rect_x_max, rect_y_max)
     
     return None
@@ -247,6 +288,26 @@ def masked_image(mask_type: str, imagepath: str, output_path: str = None,
             raise ValueError("No clothing parts detected in parsing result")
         
         x_min, y_min, x_max, y_max = bbox
+        
+        # Calculate target label density for debug info
+        if debug:
+            parse_array_debug = np.array(model_parse.resize((process_width, process_height), Image.NEAREST))
+            bbox_region_debug = parse_array_debug[y_min:y_max, x_min:x_max]
+            
+            if mask_type == "upper_body":
+                target_labels_debug = [4]
+            elif mask_type == "lower_body":
+                target_labels_debug = [5, 6]
+            else:
+                target_labels_debug = [4, 5, 6, 7]
+            
+            target_pixels = np.sum(np.isin(bbox_region_debug, target_labels_debug))
+            total_pixels = bbox_region_debug.size
+            target_density = (target_pixels / total_pixels * 100) if total_pixels > 0 else 0
+            
+            print(f"\nBounding box at processing resolution: ({x_min}, {y_min}) to ({x_max}, {y_max})")
+            print(f"Bounding box size: {x_max - x_min} x {y_max - y_min}")
+            print(f"Target clothing density in bbox: {target_density:.1f}%")
         
         # Scale bounding box to original resolution if preserving resolution
         if preserve_resolution and (process_width != original_width or process_height != original_height):
