@@ -85,6 +85,9 @@ def mask_dataset(gender='all', skip_existing=True, debug=False):
                 # Get image filename
                 image_filename = row.get('image_filename', '')
                 if pd.isna(image_filename) or image_filename == '':
+                    # Try first_image_filename (common in combined CSVs)
+                    image_filename = row.get('first_image_filename', '')
+                if pd.isna(image_filename) or image_filename == '':
                     # Try to get from other columns
                     image_filename = row.get('filename', '')
                     if pd.isna(image_filename) or image_filename == '':
